@@ -1,0 +1,908 @@
+---
+title: "Telecom_Customer_Churn"
+author: "Abhishek Garg"
+date: "03/09/2019"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+## Global Enviornment Set-Up
+
+* Set-up global enviornment for R markdown
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+## Case Study
+
+Customer Churn is a burning problem for Telecom companies. In this project, we simulate one such case of customer churn where we work on a data of postpaid customers with a contract. The data has information about the customer usage behavior, contract details and the payment details. The data also indicates which were the customers who canceled their service. **Based on this past data, we need to build a model which can predict whether a customer will cancel their service in the future or not**.
+
+## Key Objectives:
+
+* The key problem that the company is to  correctly identify the customers which are likely to churn or cancel thier service. Since the telecom industry is quite    comptetitive, any customer lost results in decreased revenue for the company and hance lower valuations ( while keeping other factors constant)
+  + Hence, while modelling it should be seen that misclassification of customers who have cancelled thier service in the past data is minimized.
+* For this analysis classifier models such as Logistic Regression and KNN would be used to predict the customers who are likely to cencel thier service.
+  + Additionally, Naive Bayes classifier would also be implemented, but with some modifications as the dataset contains numeric attibutes.
+
+## Enviornment Set-up
+
+* Loading the required libraries for analysis
+
+```{r Loading Libraries}
+
+#install.packages("ggplot2")
+#install.packages("cowplot")
+library(ggplot2)
+library(cowplot)
+library(grid)
+library(gridExtra)
+library(dplyr)
+library(tidyr)
+library(scales)
+library(DataExplorer)
+library(broom)
+library(caTools)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(RColorBrewer)
+library(data.table)
+library(SDMTools)
+library(pROC)
+library(Hmisc)
+library(car)
+library(caret)
+library(class)
+library(e1071)
+library(MASS)
+library(ROCR)
+library(rpart)
+```
+
+* Set-up working directory and import file
+
+```{r set working directory}
+org_File= read.csv("D:/RProgramming/Predictive_Modelling/Project/DataSet/Cellphone.csv",header=TRUE)
+ 
+```
+
+* **Key observations:**
+  + The dataset contains 3333 observations with 11 variables
+  + All variables are stored as integer or numeric in the imported file
+    + For analysis variaous attributes such as Churn, Contract Renewal and Dataplan would be converted to factor/ordered factors since they indicate yes/no type of       data
+  + The head function shows that the file has been imported correctly
+  + Summary of numric attributes such as AccountWeeks, DataMins, DayCalls etc. show that these are nearly nornmally distributed as the mean and median are pretty      close
+    + However, presence of outliers would be checked later and treted, whever applicable
+    
+
+```{r basic dataset analysis}
+dim(org_File)
+str(org_File)
+head(org_File)
+summary(org_File)
+
+```
+
+
+* Collinerity is a concern for many machin elearning algorithms. Hence, a copy of the dataset has been created to check if the variables are highly correlated to    each other.
+
+```{r Create a copy of file for testing collinerity}
+
+# Currently all variables are numerical and integers. To create a collinerity matrix a copy of the original model has been saved
+
+org_File_for_Collinerity= org_File[,]
+
+```
+
+
+
+
+* **Remaning coloums:**
+  + Coloums have been remamed for ease of understanding
+* **Varaibles analysis:**
+  + Customer_Churned_or_Not- 1 if the customer has cancelled the service, 0 if not. **This is out target variable.**
+  + Relationship_in_Number_of_Weeks-NUmber of weeks the customer has had an active account
+  + Contract_Renewed_or_Not- 1 if the customer renewed the contract recently, 0 if not
+  + Use_Data_Plan_or_Not- 1 if the customer uses data plan, 0 if not
+  + Data_Use_inGB- Customer's monthly data usage in gigabytes 
+  + Avg_Minutes- Average daytime minutes per  month.
+  + Avg_Calls- Average number of daytime calls 
+  + Avg_Bill- Average monthly bill
+  + Largest_Overage_Fee- Largest overage fee in the last 12 months
+  + Avg_Roaming_Minutes- Average number of romaing minutes
+  
+* ***Key Observations:***
+  + Given the domain, the loger the customer has had an active account, if the customer uses data plan, if the customer has renewed contract etc. should indicate      that the customer should stay with the company. However, this would be analysed in the upcoming steps.
+  
+
+
+```{r renaming coloums}
+# Renaming coloums in original file for ease of understanding
+
+names(org_File) = c("Customer_Churned_or_Not", "Relationship_in_Number_of_Weeks", "Contract_Renewed_or_Not","Use_Data_Plan_or_Not", "Data_Use_inGB", "Number_Customer_Service_Calls", "Avg_Minutes", "Avg_Calls", "Avg_Bill", "Largest_Overage_Fee", "Avg_Roaming_Minutes")
+names(org_File)
+
+```
+
+* Convert relevat variables to factors:
+  + Since customer churn, contract renewed or not, use data plan or not are variables with yes/no type of options, they have been concverted to factor variables.
+  + Number of customer services calls has been converted to ordered factor, since 1 call is less than 2 calls. This has specifically been cone for the puroposes of     exploratory analysis
+
+
+```{r Convert Relevant Variables to Factors}
+# 
+cat_variables=  c("Customer_Churned_or_Not", "Contract_Renewed_or_Not", "Use_Data_Plan_or_Not")
+org_File[,cat_variables] = lapply(org_File[,cat_variables] , factor)
+
+
+#Number of customer calls is converted to ordinal variable;This has been done for data analysis, bit for the models it would be converted to integers
+
+org_File$Number_Customer_Service_Calls= factor(org_File$Number_Customer_Service_Calls, ordere=TRUE, levels = c(0,1,2,3,4,5,6,7,8,9))
+str(org_File)
+```
+
+* Checking the file for presence of NA's:
+  + The data do not contain any NA's or missing values.
+
+```{r Checking for NA}
+
+sapply(org_File, function(x) sum(is.na(x)))
+plot_missing(org_File)
+
+```
+
+** Exploratory Data Analysis
+
+#### Univariate Analysis
+
+* Summary of the transformed dataset:
+  
+  + Out of 3333 observations, 483 customers have curned in the past data. Although this imbalance might affect the model performance, this would be used as is for     the current analysis.
+  + Given the intution, it can bee seen that mahority of the customers who have renewed thier contact have not cancelled thier services.
+    + However, this relationship if not coming very clearly if the person uses data plan or not. This would be analysed further.
+
+```{r Univariate Analysis 1}
+summary(org_File)
+
+```
+
+* Histograms of Numeric attributes
+  + As observed, most of the numric variables are nealy normally distributed.
+    + However, the variable data use in GB's is right skewed, with a mahority of customers not using any data. This is also justified by looking at the customers        not using any data (2411 out of 3333 observations).
+
+
+```{r Univariate Analysis 2 Histograms}
+
+p1=ggplot(data = org_File, aes(x = Relationship_in_Number_of_Weeks))+ geom_histogram(fill = "lightblue",binwidth=25, colour = "black")+ geom_vline(aes(xintercept = median(Relationship_in_Number_of_Weeks)), linetype = "dashed", size= 1)
+p2=ggplot(data = org_File, aes(x = Data_Use_inGB))+geom_histogram(fill = "lightgreen",binwidth=0.5, colour = "black")+ geom_vline(aes(xintercept = median(Data_Use_inGB)), linetype = "dashed", size= 1)
+p3=ggplot(data = org_File, aes(x = Avg_Minutes))+ geom_histogram(fill = "red",binwidth=30, colour = "black")+ geom_vline(aes(xintercept = median(Avg_Minutes)), linetype = "dashed", size= 1)
+p4=ggplot(data = org_File, aes(x = Avg_Calls))+geom_histogram(fill = "orange",binwidth=15,  colour = "black")+ geom_vline(aes(xintercept = median(Avg_Calls)), linetype = "dashed", size= 1)
+p5=ggplot(data = org_File, aes(x = Avg_Bill))+ geom_histogram(fill = "pink",binwidth=5, colour = "black")+ geom_vline(aes(xintercept = median(Avg_Bill)), linetype = "dashed", size= 1)
+p6=ggplot(data = org_File, aes(x = Largest_Overage_Fee))+ geom_histogram(fill = "sienna3",binwidth=2, colour = "black")+ geom_vline(aes(xintercept = median(Avg_Roaming_Minutes)), linetype = "dashed", size= 1)
+p7=ggplot(data = org_File, aes(x = Avg_Roaming_Minutes))+ geom_histogram(fill = "blue",binwidth=2, colour = "black")+ geom_vline(aes(xintercept = median(Avg_Roaming_Minutes)), linetype = "dashed", size= 1)
+grid.arrange(grobs = list(p1, p2,p3, p4, p5,p6,p7 ), ncol=4, top = "Histograms-Numerical Variables")
+
+
+```
+
+* Checking for outliers
+  + All the numeric variables show presence of outliers. These wouuld be treated before further analysis as presence of outliers might impact model performance.
+
+
+```{r Univariate Analysis 3 Boxplots}
+b1=ggplot(data = org_File, aes(y=Relationship_in_Number_of_Weeks))+ geom_boxplot(fill = "lightblue", outlier.colour = "black") +stat_boxplot(geom = "errorbar",width = 0.25)
+b2=ggplot(data = org_File, aes(y=Data_Use_inGB))+ geom_boxplot(fill = "lightgreen", outlier.colour = "black") +stat_boxplot(geom = "errorbar", width = 0.25)
+b3=ggplot(data =org_File, aes(y=Avg_Minutes))+ geom_boxplot(fill = "red", outlier.colour = "black") +stat_boxplot(geom = "errorbar", width = 0.25)
+b4=ggplot(data =org_File, aes(y=Avg_Calls))+ geom_boxplot(fill = "orange", outlier.colour = "black") +stat_boxplot(geom = "errorbar", width = 0.25)
+b5=ggplot(data = org_File, aes(y=Avg_Bill))+ geom_boxplot(fill = "pink", outlier.colour = "black") +stat_boxplot(geom = "errorbar",width = 0.25)
+b6=ggplot(data = org_File, aes(y=Largest_Overage_Fee))+ geom_boxplot(fill = "sienna3", outlier.colour = "black") +stat_boxplot(geom = "errorbar",width = 0.25)
+b7=ggplot(data = org_File, aes(y=Avg_Roaming_Minutes))+ geom_boxplot(fill = "blue", outlier.colour = "black") +stat_boxplot(geom = "errorbar",width = 0.25)
+grid.arrange(grobs = list(b1, b2,b3, b4, b5,b6,b7), ncol=4, top = "Box_Plots-Numerical Variables")
+```
+
+
+* Outlier Treatement
+  + Saving the database with a new name for outlier treatement and further analysis
+  + Outliers within individual variables, wherever applicable, have been replaced using the IQR rule.
+    + Upon checking the boxplots again, it can be seen that the outliers have been treated sucessfully
+  
+```{r Outlier Treatement}
+
+# Creation of New database
+org_File_OUTLIER_TREATEMENT= org_File
+
+# Outlier treatment for coloums with outliers
+
+qn10 = quantile(org_File_OUTLIER_TREATEMENT$Relationship_in_Number_of_Weeks, c(0.25, 0.75), na.rm = TRUE)
+IQR_Test=IQR(org_File_OUTLIER_TREATEMENT$Relationship_in_Number_of_Weeks) 
+org_File_OUTLIER_TREATEMENT = within(org_File_OUTLIER_TREATEMENT, { Relationship_in_Number_of_Weeks = ifelse(Relationship_in_Number_of_Weeks < qn10[1]-1.5*IQR_Test, qn10[1]-1.5*IQR_Test, Relationship_in_Number_of_Weeks)
+                          Relationship_in_Number_of_Weeks = ifelse(Relationship_in_Number_of_Weeks > qn10[2]+1.5*IQR_Test , qn10[2]+1.5*IQR_Test, Relationship_in_Number_of_Weeks)})
+                          
+qn11 = quantile(org_File_OUTLIER_TREATEMENT$Data_Use_inGB, c(0.25, 0.75), na.rm = TRUE)
+IQR_Test11=IQR(org_File_OUTLIER_TREATEMENT$Data_Use_inGB) 
+org_File_OUTLIER_TREATEMENT = within(org_File_OUTLIER_TREATEMENT, { Data_Use_inGB = ifelse(Data_Use_inGB < qn11[1]-1.5*IQR_Test11, qn11[1]-1.5*IQR_Test11, Data_Use_inGB)
+                          Data_Use_inGB = ifelse(Data_Use_inGB > qn11[2]+1.5*IQR_Test11 , qn11[2]+1.5*IQR_Test11, Data_Use_inGB)})
+
+qn12 = quantile(org_File_OUTLIER_TREATEMENT$Avg_Minutes, c(0.25, 0.75), na.rm = TRUE)
+IQR_Test12=IQR(org_File_OUTLIER_TREATEMENT$Avg_Minutes) 
+org_File_OUTLIER_TREATEMENT = within(org_File_OUTLIER_TREATEMENT, { Avg_Minutes = ifelse(Avg_Minutes < qn12[1]-1.5*IQR_Test12, qn12[1]-1.5*IQR_Test12, Avg_Minutes)
+                          Avg_Minutes = ifelse(Avg_Minutes > qn12[2]+1.5*IQR_Test12 , qn12[2]+1.5*IQR_Test12, Avg_Minutes)})
+
+qn13 = quantile(org_File_OUTLIER_TREATEMENT$Avg_Calls, c(0.25, 0.75), na.rm = TRUE)
+IQR_Test13=IQR(org_File_OUTLIER_TREATEMENT$Avg_Calls) 
+org_File_OUTLIER_TREATEMENT = within(org_File_OUTLIER_TREATEMENT, { Avg_Calls = ifelse(Avg_Calls < qn13[1]-1.5*IQR_Test13, qn13[1]-1.5*IQR_Test13, Avg_Calls)
+                          Avg_Calls = ifelse(Avg_Calls > qn13[2]+1.5*IQR_Test13 , qn13[2]+1.5*IQR_Test13, Avg_Calls)})
+
+qn14 = quantile(org_File_OUTLIER_TREATEMENT$Avg_Bill, c(0.25, 0.75), na.rm = TRUE)
+IQR_Test14=IQR(org_File_OUTLIER_TREATEMENT$Avg_Bill) 
+org_File_OUTLIER_TREATEMENT = within(org_File_OUTLIER_TREATEMENT, { Avg_Bill = ifelse(Avg_Bill < qn14[1]-1.5*IQR_Test14, qn14[1]-1.5*IQR_Test14, Avg_Bill)
+                          Avg_Bill = ifelse(Avg_Bill > qn14[2]+1.5*IQR_Test14 , qn14[2]+1.5*IQR_Test14, Avg_Bill)})
+
+
+qn15 = quantile(org_File_OUTLIER_TREATEMENT$Largest_Overage_Fee, c(0.25, 0.75), na.rm = TRUE)
+IQR_Test15=IQR(org_File_OUTLIER_TREATEMENT$Largest_Overage_Fee) 
+org_File_OUTLIER_TREATEMENT = within(org_File_OUTLIER_TREATEMENT, { Largest_Overage_Fee = ifelse(Largest_Overage_Fee < qn15[1]-1.5*IQR_Test15, qn15[1]-1.5*IQR_Test15, Largest_Overage_Fee)
+                          Largest_Overage_Fee = ifelse(Largest_Overage_Fee > qn15[2]+1.5*IQR_Test15 , qn15[2]+1.5*IQR_Test15, Largest_Overage_Fee)})
+
+qn16 = quantile(org_File_OUTLIER_TREATEMENT$Avg_Roaming_Minutes, c(0.25, 0.75), na.rm = TRUE)
+IQR_Test16=IQR(org_File_OUTLIER_TREATEMENT$Avg_Roaming_Minutes) 
+org_File_OUTLIER_TREATEMENT = within(org_File_OUTLIER_TREATEMENT, { Avg_Roaming_Minutes = ifelse(Avg_Roaming_Minutes < qn16[1]-1.5*IQR_Test16, qn16[1]-1.5*IQR_Test16, Avg_Roaming_Minutes)
+                          Avg_Roaming_Minutes = ifelse(Avg_Roaming_Minutes > qn16[2]+1.5*IQR_Test16 , qn16[2]+1.5*IQR_Test16, Avg_Roaming_Minutes)})
+
+
+b11=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(y=Relationship_in_Number_of_Weeks))+ geom_boxplot(fill = "lightblue", outlier.colour = "black") +stat_boxplot(geom = "errorbar",width = 0.25)
+b12=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(y=Data_Use_inGB))+ geom_boxplot(fill = "lightgreen", outlier.colour = "black") +stat_boxplot(geom = "errorbar", width = 0.25)
+b13=ggplot(data =org_File_OUTLIER_TREATEMENT, aes(y=Avg_Minutes))+ geom_boxplot(fill = "red", outlier.colour = "black") +stat_boxplot(geom = "errorbar", width = 0.25)
+b14=ggplot(data =org_File_OUTLIER_TREATEMENT, aes(y=Avg_Calls))+ geom_boxplot(fill = "orange", outlier.colour = "black") +stat_boxplot(geom = "errorbar", width = 0.25)
+b15=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(y=Avg_Bill))+ geom_boxplot(fill = "pink", outlier.colour = "black") +stat_boxplot(geom = "errorbar",width = 0.25)
+b16=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(y=Largest_Overage_Fee))+ geom_boxplot(fill = "sienna3", outlier.colour = "black") +stat_boxplot(geom = "errorbar",width = 0.25)
+b17=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(y=Avg_Roaming_Minutes))+ geom_boxplot(fill = "blue", outlier.colour = "black") +stat_boxplot(geom = "errorbar",width = 0.25)
+grid.arrange(grobs = list(b11, b12,b13, b14, b15,b16, b17), ncol=4, top = "Box_Plots-Numerical Variables-After Outlier Treatement")
+
+
+```
+
+
+* Seeing the number and percentage of customers churned
+  + It can be seen that nealy 15% of customers have churned recently. 
+
+
+
+```{r Univariate Analysis 5 BarPlot-Dependent Variable}
+
+# Analysis of Churn variable
+
+bp11=ggplot(org_File_OUTLIER_TREATEMENT,aes(x=Customer_Churned_or_Not))+
+    geom_bar(fill = c("lightgreen", "red"))+
+    geom_text(aes(label=..count..),stat='count',vjust=-0.5)
+
+bp12=ggplot(org_File_OUTLIER_TREATEMENT,aes(x=Customer_Churned_or_Not,))+
+    geom_bar(fill = c("lightgreen", "red"))+
+    geom_text(aes(label=scales::percent(..count../sum(..count..))),
+              stat='count',vjust=-0.5)
+grid.arrange(grobs = list(bp11, bp12), ncol=2, top = "Count and Percentage of Customer Churned")
+
+
+
+
+
+```
+
+
+* Barplots of categorical variables
+  + The barplots have been colored red to indicate customer churn, and green if they have not.
+  + The number of customer service calls indicate that majority of customers called the service desk once. 
+
+
+```{r Univariate Analysis 4 BarPlots}
+# Barplots of categorical variables
+
+
+pc1=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Contract_Renewed_or_Not))+geom_bar(stat = "count", width = 0.7, fill = c("red", "lightgreen"))
+pc2=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Use_Data_Plan_or_Not))+geom_bar(stat = "count", width = 0.7, fill = c("red", "lightgreen"))
+pc3=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Number_Customer_Service_Calls))+geom_bar(stat = "count", width = 0.7, fill = "steelblue")
+grid.arrange(grobs = list(pc1, pc2,pc3), ncol=3, top = "BarPlots-Categorical Variables")
+```
+
+#### Bivariate analysis:
+
+* Bivariate analysis of numerical variables
+
+  + It can be seen that customers with higher number of minutes and higher bill are more likely to churn
+  + There is no significant diference in the whether a customer churned or not on the basis of relationship in number of weeks, average calls, largest overage fee     or average roaming minutes
+  + Customers who have churned have a lower range of data usage thamn the customers who have not.
+
+```{r Bivariate Analysis 1}
+
+attach(org_File_OUTLIER_TREATEMENT)
+
+# Box plot for  important numeric variables vs Churn
+
+bv1=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Customer_Churned_or_Not, y = Relationship_in_Number_of_Weeks, fill = Customer_Churned_or_Not))+geom_boxplot()
+bv2=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Customer_Churned_or_Not, y = Data_Use_inGB, fill = Customer_Churned_or_Not))+geom_boxplot()
+bv3=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Customer_Churned_or_Not, y = Avg_Minutes, fill = Customer_Churned_or_Not))+geom_boxplot()
+bv4=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Customer_Churned_or_Not, y = Avg_Calls, fill = Customer_Churned_or_Not))+geom_boxplot()
+grid.arrange(grobs = list(bv1, bv2, bv3, bv4), nrow = 2,ncol=2, top = "BoxPlot-Numerical Variables vs. Customer Churn")
+
+bv5=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Customer_Churned_or_Not, y = Avg_Bill, fill = Customer_Churned_or_Not))+geom_boxplot()
+bv6=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Customer_Churned_or_Not, y = Largest_Overage_Fee, fill = Customer_Churned_or_Not))+geom_boxplot()
+bv7=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(x = Customer_Churned_or_Not, y = Avg_Roaming_Minutes, fill = Customer_Churned_or_Not))+geom_boxplot()
+grid.arrange(grobs = list(bv5, bv6, bv7), nrow = 2,ncol=2, top = "BoxPlot-Numerical Variables vs. Customer Churn")
+
+```
+
+* Bivariate analysis of categorical variables
+  + 
+
+
+```{r Bivariate Analysis 2}
+
+#stacked barplot for important categorical x variables vs Churn variable
+
+bv11=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(Contract_Renewed_or_Not, ..count..)) +geom_bar(aes(fill = Customer_Churned_or_Not), position = "fill")
+bv12=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(Use_Data_Plan_or_Not, ..count..)) +geom_bar(aes(fill = Customer_Churned_or_Not), position = "fill")
+bv13=ggplot(data = org_File_OUTLIER_TREATEMENT, aes(Number_Customer_Service_Calls, ..count..)) +geom_bar(aes(fill = Customer_Churned_or_Not), position = "fill")
+grid.arrange(grobs = list(bv11, bv12,bv13), nrow=2, ncol=2, top = "Stacked BarPlot-Categorical Variables vs. Churn")
+
+```
+
+
+#### Mulivariate analysis
+
+* Collinerity Analysis:
+  + The variables use data plan or not and data use in GB are very highly correlated (0.95). The variable data use in GB would be removed for modelling purpose.
+  + Although monthly charge also seems to be correlated with data plan and dayMins, it has been retained currentyly for modelling purposes.
+  
+
+```{r}
+
+matrix = cor(org_File_for_Collinerity)
+library(corrplot)
+col= colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(matrix, method = "color", col=col(200),tl.cex = 0.70,  addCoef.col = "black", number.digits = 2, number.cex = 0.70)
+
+
+# After removal of data usage 
+org_File_for_Collinerity_DP=org_File_for_Collinerity[,-5]
+matrix1 = cor(org_File_for_Collinerity_DP)
+library(corrplot)
+col= colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(matrix1, method = "color", col=col(200), tl.cex = 0.70, addCoef.col = "black", number.digits = 2, number.cex = 0.70)
+
+```
+
+
+## Model Building
+
+```{r Copying database for Model Building}
+
+Modelling_BASE= org_File_OUTLIER_TREATEMENT[,-5]
+
+Modelling_BASE$Contract_Renewed_or_Not= as.numeric(Modelling_BASE$Contract_Renewed_or_Not)
+Modelling_BASE$Use_Data_Plan_or_Not= as.numeric(Modelling_BASE$Use_Data_Plan_or_Not)
+Modelling_BASE$Number_Customer_Service_Calls= as.numeric(as.character(Modelling_BASE$Number_Customer_Service_Calls))
+str(Modelling_BASE)
+
+```
+
+
+* The percentage of customers churned in training and test datasets seem to be near, so this should be good.
+
+
+```{r Split Data to Testing and Training}
+# Split the data into training and testing sets.
+
+set.seed(3000)
+sample_base = sample(2,nrow(Modelling_BASE),replace=TRUE, prob=c(0.7,0.3))
+train_base=Modelling_BASE[sample_base==1,]
+test_base=Modelling_BASE[sample_base==2,]
+
+
+dim(train_base); dim(test_base)
+
+table(Modelling_BASE$Customer_Churned_or_Not)
+print(sum(Modelling_BASE$Customer_Churned_or_Not=="1")/nrow(Modelling_BASE))
+
+
+
+table(train_base$Customer_Churned_or_Not)
+print(sum(train_base$Customer_Churned_or_Not=="1")/nrow(train_base))
+table(test_base$Customer_Churned_or_Not)
+print(sum(test_base$Customer_Churned_or_Not=="1")/nrow(test_base))
+
+
+```
+
+## Logistic Regression Model
+
+* Copy of test and training dataset are created
+* Training dataset has 2270  obervatiopns, while test set has 1063 observations
+  + In the training data there 323 customers or 14.2% customers who have churned
+  + In the test data there 160 customers or 15.1% customers who have churned
+
+```{r}
+# Logit model with all variables
+
+## Taining and Testind Datasets for Logistic regression Model
+
+logit_train= train_base
+logit_test= test_base
+
+dim(logit_train)
+dim(logit_test)
+
+
+# Check frequency and proportion of Churned customers in the train and test  dataset
+table(logit_train$Customer_Churned_or_Not)
+print(sum(logit_train$Customer_Churned_or_Not=="1")/nrow(logit_train))
+
+
+table(logit_test$Customer_Churned_or_Not)
+print(sum(logit_test$Customer_Churned_or_Not=="1")/nrow(logit_test))
+
+```
+
+
+* Creation of Logitic regression model
+
+  + Final Model **logit_final** is created after removal of collinear and insignificant variables
+
+
+```{r}
+logit_Eq_1= Customer_Churned_or_Not~Relationship_in_Number_of_Weeks+Contract_Renewed_or_Not+ Use_Data_Plan_or_Not+Number_Customer_Service_Calls+Avg_Minutes+Avg_Calls+Avg_Bill+ Largest_Overage_Fee+Avg_Roaming_Minutes
+logit_Model_1 = glm(logit_Eq_1 , logit_train, family = binomial)
+summary(logit_Model_1)
+vif(logit_Model_1)
+
+
+logit_Eq_2= Customer_Churned_or_Not~Relationship_in_Number_of_Weeks+Contract_Renewed_or_Not+ Use_Data_Plan_or_Not+Number_Customer_Service_Calls+Avg_Minutes+Avg_Calls+ Largest_Overage_Fee+Avg_Roaming_Minutes
+logit_Model_2 = glm(logit_Eq_2 , logit_train, family = binomial)
+summary(logit_Model_2)
+vif(logit_Model_2)
+
+# Remove relationship in Number of weeks as it is not significant
+
+logit_Eq_3= Customer_Churned_or_Not~Contract_Renewed_or_Not+ Use_Data_Plan_or_Not+Number_Customer_Service_Calls+Avg_Minutes+Avg_Calls+ Largest_Overage_Fee+Avg_Roaming_Minutes
+logit_Model_3 = glm(logit_Eq_3 , logit_train, family = binomial)
+summary(logit_Model_3)
+vif(logit_Model_3)
+
+
+# Final Model after removing collinerity and insignificant variables
+
+logit_final= logit_Model_3
+```
+
+
+* Cross Validation (Confusion Matrix & ROC)
+
+  + Observations
+    + For the training set, the accuracy is 0.86 and the AUC is 0.81. For the test set, the accuracy is 0.85 and the AUC is 0.81. The model seems to be good             because the accuracy and AUC do not have big difference between the training and test sets. But the Specificities for two sets are as low as 0.17.
+
+```{r}
+train_prob=predict(logit_final, data = logit_train, type = "response")
+test_prob=predict(logit_final, newdata = logit_test, type = "response")
+
+# Set the threshold as 0.5 by default.
+
+train_pred = factor(ifelse(train_prob >= 0.5, "Yes", "No"))
+train_actual = factor(ifelse(logit_train$Customer_Churned_or_Not == 1, "Yes", "No"))
+test_pred = factor(ifelse(test_prob >= 0.5, "Yes", "No"))
+test_actual = factor(ifelse(logit_test$Customer_Churned_or_Not == 1, "Yes", "No"))
+
+
+```
+
+
+
+```{r}
+# For training set 
+
+confusionMatrix(data=train_pred, reference=train_actual)
+roc_train = roc(logit_train$Customer_Churned_or_Not, train_prob, plot= TRUE, print.auc=TRUE)
+```
+
+```{r}
+# For the test set
+
+
+confusionMatrix(data = test_pred, reference = test_actual)
+roc = roc(logit_test$Customer_Churned_or_Not, test_prob, plot= TRUE, print.auc=TRUE)
+
+```
+
+
+* Find the optimal cutoff and adjust the class of prediction
+
+  + Optimal cutoff is identified as 0.142, so prediction would be adjusted accodingly
+
+```{r}
+
+pred = prediction(train_prob, train_actual)
+perf = performance(pred, "spec", "sens")
+
+
+cutoffs = data.frame(cut=perf@alpha.values[[1]], specificity=perf@x.values[[1]], 
+                      sensitivity= perf@y.values[[1]])
+opt_cutoff = cutoffs[which.min(abs(cutoffs$specificity-cutoffs$sensitivity)),]
+opt_cutoff
+```
+
+* Plot optimal cutoff
+
+
+```{r}
+ggplot(data = cutoffs) +
+  geom_line(aes(x = cut, y = specificity, color ="red"), size = 1.5)+
+  geom_line(aes(x = cut, y = sensitivity, color = "blue"), size = 1.5) +
+  labs(x = "cutoff", y ="value") +
+  scale_color_discrete(name = "", labels = c("Specificity", "Sensitivity"))+
+  geom_vline(aes(xintercept = opt_cutoff$cut))+
+  geom_text(aes(x= 0.55, y= 0.75),label="opt_cutoff = 0.142",hjust=1, size=4)
+```
+
+* Predictions using optimal cutoffs
+  + For the training set, the Accuracy is 0.75, and the Sensitivity and Specificity are both about 0.73. For the test set, the Accuracy is 0.75, and the Sensitivity and Specificity are 0.78 and 0.73 respectively. Overall, this model with adjusted cutoff works well.
+
+```{r}
+
+train_pred_c = factor(ifelse(train_prob >= 0.14, "Yes", "No"))
+test_pred_c = factor(ifelse(test_prob >= 0.14, "Yes", "No"))
+
+
+```
+
+
+
+* Prediction on training set with threshold = 0.14:
+
+```{r}
+
+
+confusionMatrix(data = train_pred_c, reference = train_actual)
+
+
+
+```
+
+
+```{r}
+library(ROCR)
+library(ineq)
+
+# Checking other preformance measures for the Model
+
+predObj_logit= prediction(train_prob, train_actual)
+perf_logit = performance(predObj_logit, "tpr", "fpr")
+plot(perf_logit, main = "ROC curve for logit train after cutoff")
+
+# Model validation-Training: KS, AUC
+
+KS_logit= max(perf_logit@y.values[[1]]-perf_logit@x.values[[1]])
+KS_logit
+
+auc_logit = performance(predObj_logit,"auc") 
+slot(auc_logit, "y.values")
+
+gini_logit= ineq(train_pred_c, "gini")
+print(gini_logit)
+
+
+
+  
+```
+
+
+
+
+
+* Prediction on test with threshhold =0.14:
+
+```{r}
+confusionMatrix(data = test_pred_c, reference = test_actual)
+
+```
+
+
+```{r}
+
+library(ROCR)
+library(ineq)
+
+# Checking other preformance measures for the RF Model
+
+predObj_logit_test= prediction(test_prob, test_actual)
+perf_logit_test = performance(predObj_logit_test, "tpr", "fpr")
+plot(perf_logit_test, main = "ROC curve for logit test after cutoff")
+
+# Model validation-Training: KS, AUC
+
+KS_logit_test= max(perf_logit_test@y.values[[1]]-perf_logit_test@x.values[[1]])
+KS_logit
+
+auc_logit_test = performance(predObj_logit_test,"auc") 
+slot(auc_logit_test, "y.values")
+
+gini_logit= ineq(test_pred_c, "gini")
+print(gini_logit)
+
+
+
+  
+
+```
+
+
+
+* 10-Fold Cross Validation
+
+  + Overall the accuracy rate for logistic regression model after 10-fold valodation is ~74%
+
+```{r}
+
+#10 Fold validation with Logistic Regression
+
+set.seed(3000)
+folds_logit = createFolds(logit_train$Customer_Churned_or_Not, k=10)
+str(folds_logit)
+
+
+
+cv_logit=lapply(folds_logit,function(x){
+  train.logit.kval=logit_train[x,]
+  test.logit.kval=logit_test[-x,]
+  logit.kval=glm(logit_Eq_3, train.logit.kval, family = binomial)
+  logit.kval.pred=predict(logit.kval, test.logit.kval, type = "response")
+  tab.logit.kval=table(test.logit.kval$Customer_Churned_or_Not, logit.kval.pred>=0.14)
+  
+  sum(diag(tab.logit.kval))/sum(tab.logit.kval)
+})
+
+str(cv_logit)
+fit.logit<-mean(unlist(cv_logit))
+fit.logit
+
+```
+
+## K Nearest Neighbour Model
+
+* Making copies of train and test data for KNN Model
+
+```{r}
+KNN_train= train_base
+KNN_test= test_base
+
+dim(KNN_train)
+dim(KNN_test)
+
+str(KNN_train)
+str(KNN_test)
+
+```
+
+```{r}
+
+# Normalise variables
+normalize=function(x){
+  +return((x-min(x))/(max(x)-min(x)))}
+
+
+# Train Data
+
+KNN_train$norm.Relationship_in_Number_of_Weeks<-normalize(KNN_train$Relationship_in_Number_of_Weeks)
+KNN_train$norm.Contract_Renewed_or_Not<-normalize(KNN_train$Contract_Renewed_or_Not)
+KNN_train$norm.Use_Data_Plan_or_Not<-normalize(KNN_train$Use_Data_Plan_or_Not)
+KNN_train$norm.Number_Customer_Service_Calls<-normalize(KNN_train$Number_Customer_Service_Calls)
+KNN_train$norm.Avg_Minutes<-normalize(KNN_train$Avg_Minutes)
+KNN_train$norm.Avg_Calls<-normalize(KNN_train$Avg_Calls)
+KNN_train$norm.Bill<-normalize(KNN_train$Avg_Bill)
+KNN_train$norm.Largest_Overage_Fee<-normalize(KNN_train$Largest_Overage_Fee)
+KNN_train$norm.Avg_Roaming_Minutes <-normalize(KNN_train$Avg_Roaming_Minutes )
+
+
+
+# Test Data
+
+
+KNN_test$norm.Relationship_in_Number_of_Weeks<-normalize(KNN_test$Relationship_in_Number_of_Weeks)
+KNN_test$norm.Contract_Renewed_or_Not<-normalize(KNN_test$Contract_Renewed_or_Not)
+KNN_test$norm.Use_Data_Plan_or_Not<-normalize(KNN_test$Use_Data_Plan_or_Not)
+KNN_test$norm.Number_Customer_Service_Calls<-normalize(KNN_test$Number_Customer_Service_Calls)
+KNN_test$norm.Avg_Minutes<-normalize(KNN_test$Avg_Minutes)
+KNN_test$norm.Avg_Calls<-normalize(KNN_test$Avg_Calls)
+KNN_test$norm.Bill<-normalize(KNN_test$Avg_Bill)
+KNN_test$norm.Largest_Overage_Fee<-normalize(KNN_test$Largest_Overage_Fee)
+KNN_test$norm.Avg_Roaming_Minutes <-normalize(KNN_test$Avg_Roaming_Minutes )
+
+head(KNN_train)
+head(KNN_test)
+
+
+```
+
+
+```{r}
+# New Tesring and trainig datasets
+
+KNN_train_New= KNN_train [,c(1,11:19)]
+dim(KNN_train_New)
+str(KNN_train_New)
+
+KNN_test_New= KNN_test [,c(1,11:19)]
+dim(KNN_test_New)
+```
+
+* CHecking the optimum level of k to mazimise accuracy- USING CARET PAKAGE
+
+```{r}
+trctrl <- trainControl(method = "cv", number = 10)
+set.seed(3333)
+knn_fit <- train(Customer_Churned_or_Not ~., data = KNN_train_New, method = "knn",
+ trControl=trctrl,
+ tuneLength = 10)
+knn_fit
+summary(knn_fit)
+
+
+```
+
+* Maximum accuracy is achieved at 7 k=7
+
+```{r}
+plot(knn_fit)
+```
+
+```{r}
+test_pred_KNN <- predict(knn_fit, newdata = KNN_test_New)
+
+confusionMatrix(test_pred_KNN, KNN_test_New$Customer_Churned_or_Not )
+```
+
+
+
+* However, since our objective is to also maximise the identification of customers who show a propensity to churn, it would be     
+  advisable to check different k values for specivity as well.
+  + As can be seen that while accuracy is maximum at k=7, the specificty if around 0.4. However, when k is changed to 3, accurancy is not compromised much, but specificy increases tp 0.49. 
+
+```{r KNN Model}
+
+
+#knn with k-3
+KNN_3<-knn(train=KNN_train_New[,-1],test=KNN_test_New[-1], cl=KNN_train[,1],k=3)
+confusionMatrix(data = KNN_3, reference = KNN_test_New[,1])
+
+
+#knn with k-5
+KNN_5<-knn(train=KNN_train_New[,-1],test=KNN_test_New[-1], cl=KNN_train[,1],k=5)
+confusionMatrix(data = KNN_5, reference = KNN_test_New[,1])
+
+
+#knn with k-7
+KNN_7<-knn(train=KNN_train_New[,-1],test=KNN_test_New[-1], cl=KNN_train[,1],k=7)
+confusionMatrix(data = KNN_7, reference = KNN_test_New[,1])
+
+#knn with k-11
+KNN_11<-knn(train=KNN_train_New[,-1],test=KNN_test_New[-1], cl=KNN_train[,1],k=11)
+confusionMatrix(data = KNN_11, reference = KNN_test_New[,1])
+
+
+```
+
+* Upon 10-fold cross validation, the mean accuracy for the KNN models at K=3 comes out to be ~0.87
+
+```{r}
+# 10 fold cross validation
+
+#10 Fold validation with Logistic Regression
+
+set.seed(3000)
+folds_KNN = createFolds(KNN_train_New$Customer_Churned_or_Not, k=10)
+str(folds_KNN)
+
+cv_KNN=lapply(folds_KNN,function(x){
+  train.KNN.kval=KNN_train_New[x,]
+  test.KNN.kval=KNN_test_New[-x,]
+  KNN.kval=knn(train=train.KNN.kval[,-1],test=test.KNN.kval[-1], cl=train.KNN.kval[,1],k=3)
+  tab.KNN.kval=table(test.KNN.kval$Customer_Churned_or_Not, KNN.kval)
+  sum(diag(tab.KNN.kval))/sum(tab.KNN.kval)
+})
+
+str(cv_KNN)
+fit.KNN<-mean(unlist(cv_KNN))
+fit.KNN
+
+```
+
+
+
+
+## Naive Bayes Model
+
+* Although the base version of the Naive bayes model requires categorical predictores, the given dataset contains mostly numeric       variables.
+  + One of the ways to deal with this situation is to discretize numeric variable using bins, however since the number of variables      concerned is large, it might result in information loss.
+  
+  + Other option  for numerical variable is that normal distribution is assumed (bell curve, which is a strong assumption).
+    + In our case all the numeric variables follow nearly normal distribution, hence naive bayes can be apploed.
+      + The varible data use in GB, which was skewed has been removed for Naive bayes
+
+```{r}
+# Create a copy of base cleaned up dataset for modelling
+
+
+NB_Model_train= KNN_train [,c(1,3,4,11,14:19)]
+NB_Model_test= KNN_test [,c(1,3,4,11,14:19)]
+# Check the structure
+
+str(NB_Model_train)
+str(NB_Model_test)
+```
+
+
+```{r}
+# Convert relevant variables to categorical-Contract Renewed or Not & Use data Plan or Not
+
+NB_Model_train$Contract_Renewed_or_Not= as.factor(NB_Model_train$Contract_Renewed_or_Not)
+NB_Model_train$Use_Data_Plan_or_Not= as.factor(NB_Model_train$Use_Data_Plan_or_Not)
+
+
+NB_Model_test$Contract_Renewed_or_Not= as.factor(NB_Model_test$Contract_Renewed_or_Not)
+NB_Model_test$Use_Data_Plan_or_Not= as.factor(NB_Model_test$Use_Data_Plan_or_Not)
+
+
+# Check Structure again
+
+str(NB_Model_train)
+str(NB_Model_test)
+```
+
+
+
+
+```{r Naive Bayes Model}
+
+
+# Implement Naive Bayes Theorm
+
+NB_Model_1=naiveBayes(x=NB_Model_train[-1], y=NB_Model_train$Customer_Churned_or_Not)
+
+
+#predictions using Naive Bayes
+
+NB_Model_1_Predict= predict(NB_Model_1,newdata=NB_Model_test[-1])
+
+
+# Checking Confusion matrix
+
+confusionMatrix(data = NB_Model_1_Predict, reference = NB_Model_test[,1])
+
+```
+
+```{r}
+# 10-fold validation with NB
+
+set.seed(3000)
+folds_NB = createFolds(NB_Model_train$Customer_Churned_or_Not, k=10)
+str(folds_KNN)
+
+cv_NB<-lapply(folds_NB,function(x){
+  train.NB.kval<-NB_Model_train[x,]
+  test.NB.kval<-NB_Model_test[-x,]
+  
+  NB.kval<-naiveBayes(x=train.NB.kval[-1], y=train.NB.kval$Customer_Churned_or_Not)
+  y_pred.NB.kval<-predict(NB.kval,newdata=test.NB.kval[-1])
+  cm.NB.kval=table(test.NB.kval[,1],y_pred.NB.kval)
+  sum(diag(cm.NB.kval))/sum(cm.NB.kval)
+})
+
+str(cv_NB)
+fit.NB<-mean(unlist(cv_NB))
+fit.NB
+```
+
+
+
+
+
